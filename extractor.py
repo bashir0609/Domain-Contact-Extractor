@@ -27,6 +27,7 @@ def extract_emails(url):
         # Wait for page to load
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, 'body'))
+        )
         
         # Scroll to load dynamic content
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
