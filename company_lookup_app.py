@@ -92,15 +92,40 @@ if run:
             domain = website.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
 
             prompt = f"""
-You're a research AI with browsing capability. Find publicly listed or known C-level, Director, or Department Head contact info
-for **{company}** (website: {website}) based in {country}. Use LinkedIn, company websites, or articles.
+You are a research AI with browsing capability.  
+Conduct a targeted search for publicly listed or otherwise known C-level executives, Directors, or Department Heads at **{company}** (website: {website}), based in {country}.  
+Use LinkedIn profiles, the company website, press releases, and reputable business articles as your sources.
 
-Return a markdown table with:
-- Name | Role | LinkedIn | Email | General Company Email
+**Requirements:**
 
-👉 If something is not found, leave it blank or guess format like j.doe@{domain}.
-Please cite source URLs under the table.
-"""
+- **Return a clear markdown table** with the following columns:
+  - **Name** | **Role** | **LinkedIn URL** | **Email** | **General Company Email**
+- **If a field cannot be found, leave it blank.**
+- **For email addresses:**  
+  - If you cannot find a confirmed email, but the person’s name and company domain are known, use a common format (e.g., `j.doe@domain.com`, `first.last@domain.com`, etc.).
+  - Always indicate if the email is guessed (e.g., “(guessed)”).
+- **General Company Email:**  
+  - If available, list a generic company email (e.g., `info@domain.com`, `contact@domain.com`).
+- **Cite your sources:**  
+  - Under the table, provide direct URLs to LinkedIn profiles, company pages, or articles where you found the information.
+
+**Example Output:**
+
+| Name              | Role         | LinkedIn URL                                   | Email                | General Company Email   |
+|-------------------|--------------|------------------------------------------------|----------------------|------------------------|
+| Jane Doe          | CEO          | linkedin.com/in/janedoe                        | j.doe@domain.com     | info@domain.com        |
+| John Smith        | CTO          | linkedin.com/in/johnsmith                      |                      |                        |
+| Alice Brown       | Sales Director | linkedin.com/in/alicebrown                   | alice.brown@domain.com (guessed) | contact@domain.com     |
+
+**Sources:**
+- [LinkedIn: Jane Doe](https://linkedin.com/in/janedoe)
+- [Company Team Page](https://domain.com/team)
+- [Press Release: New CTO](https://example.com/press)
+
+---
+
+👉 **If you cannot find any information, clearly state that and explain your search process.**
+
 
             try:
                 output = query_openrouter(api_key, model, prompt)
