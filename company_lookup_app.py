@@ -185,7 +185,7 @@ You are a professional business research assistant with web browsing capabilitie
 **REQUIREMENTS**:
 
 **OUTPUT FORMAT**: Return a clean markdown table with these exact columns:
-| Name | Role | LinkedIn URL | Email | Phone | General Company Contact |
+| Name | Role | LinkedIn URL | Email | General Company Contact |
 
 **DATA QUALITY RULES**:
 - Only include individuals you can verify are current employees
@@ -197,14 +197,14 @@ You are a professional business research assistant with web browsing capabilitie
 **SOURCES**: After the table, provide a "Sources" section with clickable links to all references used.
 
 **EXAMPLE OUTPUT**:
-| Name | Role | LinkedIn URL | Email | Phone | General Company Contact |
+| Name | Role | LinkedIn URL | Email | General Company Contact |
 |------|------|--------------|-------|-------|------------------------|
-| Jane Smith | CEO | linkedin.com/in/janesmith | j.smith@{domain} | | info@{domain} |
-| John Doe | CTO | linkedin.com/in/johndoe | john.doe@{domain} (estimated) | | |
+| Jane Smith | CEO | https://www.linkedin.com/in/janesmith | j.smith@{domain} | | info@{domain} |
+| John Doe | CTO | https://www.linkedin.com/in/johndoe | john.doe@{domain}| | |
 
 **Sources:**
 - [Company Team Page](https://{domain}/team)
-- [LinkedIn: Jane Smith](https://linkedin.com/in/janesmith)
+- [LinkedIn: Jane Smith](https://www.linkedin.com/in/janesmith)
 
 **IMPORTANT**: 
 - Focus on C-level executives, directors, and department heads
