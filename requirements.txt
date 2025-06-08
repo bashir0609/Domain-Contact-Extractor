@@ -1,9 +1,35 @@
-streamlit
-selenium
-beautifulsoup4
-pandas
-requests-html
-validators
-webdriver-manager
-openai
-python-dotenv
+# Core web framework
+streamlit>=1.28.0
+
+# Web scraping and automation
+selenium>=4.15.0
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+webdriver-manager>=4.0.0
+
+# Data processing and validation
+pandas>=2.0.0
+validators>=0.22.0
+
+# AI/API integration
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Additional utilities for improved functionality
+lxml>=4.9.0  # XML parsing for sitemaps
+urllib3>=2.0.0  # HTTP client
+chardet>=5.2.0  # Character encoding detection
+
+# Optional: Enhanced features
+openpyxl>=3.1.0  # Excel export support
+xlsxwriter>=3.1.0  # Excel formatting
+python-magic>=0.4.27  # File type detection (optional)
+
+# Development and testing (optional)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.9.0
+flake8>=6.0.0
+
+# Security
+cryptography>=41.0.0  # For secure API key handling
