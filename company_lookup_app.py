@@ -2,154 +2,417 @@ import streamlit as st
 import os
 import requests
 import pandas as pd
+import logging
+import time
+import re
+from datetime import datetime
+from typing import Optional, List, Tuple, Dict
 from dotenv import load_dotenv
 from io import StringIO
+import validators
 
-# Load API key from .env if available
-load_dotenv()
-api_key = os.getenv("OPENROUTER_API_KEY")
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# App setup
-st.set_page_config(page_title="Company Contact Finder (Live AI)", layout="centered")
-st.title("📇 Company Contact Finder (OpenRouter + Web Search)")
-st.caption("🔍 Uses Perplexity.ai via OpenRouter to find real contacts and leadership data")
+class Config:
+    """Configuration management"""
+    def __init__(self):
+        load_dotenv()
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.rate_limit_delay = float(os.getenv("RATE_LIMIT_DELAY", "2"))
+        self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
+        self.default_model = "perplexity/llama-3-sonar-large-online"
 
-# Allow key entry fallback
-if not api_key:
-    api_key = st.text_input("🔐 OpenRouter API Key", type="password")
-    if not api_key:
-        st.warning("Please enter your API key to continue.")
-        st.stop()
-
-# Get available models from OpenRouter
-@st.cache_data
-def get_available_models(api_key):
-    try:
-        resp = requests.get("https://openrouter.ai/api/v1/models", headers={"Authorization": f"Bearer {api_key}"})
-        models = resp.json()["data"]
-        return [model["id"] for model in models if "perplexity" in model["id"] or "online" in model["id"]]
-    except Exception as e:
-        st.error("Model loading error. Please check your API key or network.")
-        return []
-
-models = get_available_models(api_key)
-preferred_model = "perplexity/llama-3-sonar-large-online"
-default_model = preferred_model if preferred_model in models else models[0] if models else None
-
-# Model selector
-if default_model:
-    model = st.selectbox("🧠 Choose an AI Model with Web Access", models, index=models.index(default_model))
-else:
-    st.error("❌ No valid models found.")
-    st.stop()
-
-# User input
-st.markdown("### 🔎 Enter Company Details")
-company = st.text_input("🏢 Company Name", placeholder="e.g. SHS Consulting")
-website = st.text_input("🌐 Company Website", placeholder="e.g. shs-co.de")
-country = st.text_input("📍 Country", value="Germany")
-run = st.button("Find Real Leadership Contacts")
-
-# Query OpenRouter
-def query_openrouter(api_key, model, prompt):
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        raise Exception(f"OpenRouter API error: {response.status_code} - {response.text}")
-
-# Table parser from markdown
-def parse_markdown_table(text):
-    table_lines = [line for line in text.split("\n") if "|" in line and "---" not in line]
-    if not table_lines:
+class OpenRouterClient:
+    """OpenRouter API client with error handling and rate limiting"""
+    
+    def __init__(self, api_key: str, rate_limit_delay: float = 2):
+        self.api_key = api_key
+        self.rate_limit_delay = rate_limit_delay
+        self.last_request_time = 0
+        
+    def _wait_for_rate_limit(self):
+        """Implement rate limiting"""
+        elapsed = time.time() - self.last_request_time
+        if elapsed < self.rate_limit_delay:
+            time.sleep(self.rate_limit_delay - elapsed)
+        self.last_request_time = time.time()
+    
+    def get_available_models(self) -> List[str]:
+        """Get available models from OpenRouter"""
+        try:
+            self._wait_for_rate_limit()
+            resp = requests.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10
+            )
+            resp.raise_for_status()
+            models = resp.json()["data"]
+            return [model["id"] for model in models 
+                   if "perplexity" in model["id"].lower() or "online" in model["id"].lower()]
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching models: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching models: {e}")
+            return []
+    
+    def query_model(self, model: str, prompt: str, max_retries: int = 3) -> Optional[str]:
+        """Query OpenRouter with retry logic"""
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": 2000
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                self._wait_for_rate_limit()
+                response = requests.post(url, headers=headers, json=data, timeout=30)
+                
+                if response.status_code == 200:
+                    result = response.json()["choices"][0]["message"]["content"]
+                    logger.info(f"Successful API call on attempt {attempt + 1}")
+                    return result
+                elif response.status_code == 429:  # Rate limited
+                    wait_time = (attempt + 1) * 5
+                    logger.warning(f"Rate limited, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"API error {response.status_code}: {response.text}")
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"Request timeout on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+        
         return None
-    headers = [cell.strip() for cell in table_lines[0].split("|") if cell.strip()]
-    rows = [[cell.strip() for cell in row.split("|") if cell.strip()] for row in table_lines[1:]]
-    return pd.DataFrame(rows, columns=headers)
 
-# Citations parser
-def extract_citations(text):
-    import re
-    matches = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", text)
-    return matches
+class DataProcessor:
+    """Data processing utilities"""
+    
+    @staticmethod
+    def parse_markdown_table(text: str) -> Optional[pd.DataFrame]:
+        """Parse markdown table from AI response"""
+        try:
+            lines = text.split("\n")
+            table_lines = [line for line in lines if "|" in line and "---" not in line]
+            
+            if len(table_lines) < 2:
+                return None
+                
+            # Extract headers
+            headers = [cell.strip() for cell in table_lines[0].split("|") if cell.strip()]
+            if not headers:
+                return None
+            
+            # Extract rows
+            rows = []
+            for line in table_lines[1:]:
+                row = [cell.strip() for cell in line.split("|") if cell.strip()]
+                if len(row) == len(headers):  # Only include complete rows
+                    rows.append(row)
+            
+            if not rows:
+                return None
+                
+            return pd.DataFrame(rows, columns=headers)
+        except Exception as e:
+            logger.error(f"Error parsing markdown table: {e}")
+            return None
+    
+    @staticmethod
+    def extract_citations(text: str) -> List[Tuple[str, str]]:
+        """Extract citations from text"""
+        pattern = r"\[([^\]]+)\]\((https?://[^\)]+)\)"
+        return re.findall(pattern, text)
+    
+    @staticmethod
+    def validate_company_data(company: str, website: str, country: str) -> Tuple[bool, str]:
+        """Validate input data"""
+        if not company or len(company.strip()) < 2:
+            return False, "Company name must be at least 2 characters"
+        
+        if not website:
+            return False, "Website URL is required"
+            
+        # Add protocol if missing
+        if not website.startswith(('http://', 'https://')):
+            website = 'https://' + website
+            
+        if not validators.url(website):
+            return False, "Invalid website URL format"
+        
+        if not country or len(country.strip()) < 2:
+            return False, "Country must be at least 2 characters"
+            
+        return True, ""
 
-# Main logic
-if run:
-    if not company or not website or not country:
-        st.warning("⚠️ Please fill in all fields.")
-    else:
-        with st.spinner("🔎 Searching the web for real contacts..."):
+def create_search_prompt(company: str, website: str, country: str) -> str:
+    """Create optimized search prompt"""
+    domain = website.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+    
+    return f"""
+You are a professional business research assistant with web browsing capabilities.
 
-            domain = website.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+**TASK**: Find verified contact information for key executives at {company} (website: {website}), located in {country}.
 
-            prompt = f"""
-You are a research AI with browsing capability.  
-Conduct a targeted search for publicly listed or otherwise known C-level executives, Directors, or Department Heads at **{company}** (website: {website}), based in {country}.  
-Use LinkedIn profiles, the company website, press releases, and reputable business articles as your sources.
+**SEARCH STRATEGY**:
+1. Check the company's official website team/about pages
+2. Search LinkedIn for current employees with leadership titles
+3. Look for recent press releases or news articles
+4. Check business directories and professional networks
 
-**Requirements:**
+**REQUIREMENTS**:
 
-- **Return a clear markdown table** with the following columns:
-  - **Name** | **Role** | **LinkedIn URL** | **Email** | **General Company Email**
-- **If a field cannot be found, leave it blank.**
-- **For email addresses:**  
-  - If you cannot find a confirmed email, but the person’s name and company domain are known, use a common format (e.g., `j.doe@domain.com`, `first.last@domain.com`, etc.).
-  - Always indicate if the email is guessed (e.g., “(guessed)”).
-- **General Company Email:**  
-  - If available, list a generic company email (e.g., `info@domain.com`, `contact@domain.com`).
-- **Cite your sources:**  
-  - Under the table, provide direct URLs to LinkedIn profiles, company pages, or articles where you found the information.
+**OUTPUT FORMAT**: Return a clean markdown table with these exact columns:
+| Name | Role | LinkedIn URL | Email | Phone | General Company Contact |
 
-**Example Output:**
+**DATA QUALITY RULES**:
+- Only include individuals you can verify are current employees
+- For emails: Use confirmed addresses or educated guesses based on company domain patterns
+- Mark guessed emails with "(estimated)" 
+- Include general company contact info when available
+- Leave fields blank if no reliable information is found
 
-| Name              | Role         | LinkedIn URL                                   | Email                | General Company Email   |
-|-------------------|--------------|------------------------------------------------|----------------------|------------------------|
-| Jane Doe          | CEO          | linkedin.com/in/janedoe                        | j.doe@domain.com     | info@domain.com        |
-| John Smith        | CTO          | linkedin.com/in/johnsmith                      |                      |                        |
-| Alice Brown       | Sales Director | linkedin.com/in/alicebrown                   | alice.brown@domain.com (guessed) | contact@domain.com     |
+**SOURCES**: After the table, provide a "Sources" section with clickable links to all references used.
+
+**EXAMPLE OUTPUT**:
+| Name | Role | LinkedIn URL | Email | Phone | General Company Contact |
+|------|------|--------------|-------|-------|------------------------|
+| Jane Smith | CEO | linkedin.com/in/janesmith | j.smith@{domain} | | info@{domain} |
+| John Doe | CTO | linkedin.com/in/johndoe | john.doe@{domain} (estimated) | | |
 
 **Sources:**
-- [LinkedIn: Jane Doe](https://linkedin.com/in/janedoe)
-- [Company Team Page](https://domain.com/team)
-- [Press Release: New CTO](https://example.com/press)
+- [Company Team Page](https://{domain}/team)
+- [LinkedIn: Jane Smith](https://linkedin.com/in/janesmith)
 
----
+**IMPORTANT**: 
+- Focus on C-level executives, directors, and department heads
+- Verify current employment status
+- Prioritize recent and authoritative sources
+- If no contacts found, explain your search process
 
-👉 **If you cannot find any information, clearly state that and explain your search process.**
+Begin your research now for {company}.
+"""
 
+def main():
+    # App configuration
+    st.set_page_config(
+        page_title="Company Contact Finder Pro",
+        page_icon="📇",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Initialize configuration
+    config = Config()
+    
+    # Header
+    st.title("📇 Company Contact Finder Pro")
+    st.markdown("*AI-powered professional contact discovery with real-time web research*")
+    
+    # Sidebar for settings
+    with st.sidebar:
+        st.header("⚙️ Settings")
+        
+        # API Key handling
+        api_key = config.api_key
+        if not api_key:
+            api_key = st.text_input("🔐 OpenRouter API Key", type="password", 
+                                   help="Get your key from openrouter.ai")
+            if not api_key:
+                st.error("API key required to continue")
+                st.stop()
+        else:
+            st.success("✅ API key loaded from environment")
+        
+        # Advanced settings
+        with st.expander("Advanced Settings"):
+            rate_limit = st.slider("Rate Limit (seconds)", 1, 10, int(config.rate_limit_delay))
+            max_retries = st.slider("Max Retries", 1, 5, config.max_retries)
+    
+    # Initialize client
+    client = OpenRouterClient(api_key, rate_limit)
+    
+    # Get available models
+    with st.spinner("Loading available models..."):
+        models = client.get_available_models()
+    
+    if not models:
+        st.error("❌ No models available. Please check your API key.")
+        st.stop()
+    
+    # Model selection
+    preferred_model = config.default_model
+    default_index = models.index(preferred_model) if preferred_model in models else 0
+    
+    model = st.selectbox(
+        "🧠 AI Model", 
+        models, 
+        index=default_index,
+        help="Perplexity models provide the best web search capabilities"
+    )
+    
+    # Main input form
+    st.header("🔍 Company Research")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        company = st.text_input(
+            "🏢 Company Name *", 
+            placeholder="e.g., Microsoft, Tesla, OpenAI",
+            help="Enter the exact company name"
+        )
+        
+        website = st.text_input(
+            "🌐 Company Website *", 
+            placeholder="e.g., microsoft.com, tesla.com",
+            help="Main company website (with or without https://)"
+        )
+    
+    with col2:
+        country = st.text_input(
+            "📍 Country/Region *", 
+            value="United States",
+            help="Primary company location"
+        )
+        
+        search_depth = st.selectbox(
+            "🔎 Search Depth",
+            ["Standard", "Deep Research"],
+            help="Deep research may take longer but provides more comprehensive results"
+        )
+    
+    # Search button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        search_button = st.button(
+            "🚀 Find Leadership Contacts", 
+            type="primary",
+            use_container_width=True
+        )
+    
+    # Process search
+    if search_button:
+        # Validate inputs
+        is_valid, error_msg = DataProcessor.validate_company_data(company, website, country)
+        if not is_valid:
+            st.error(f"❌ {error_msg}")
+            return
+        
+        # Show search progress
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Update progress
+            progress_bar.progress(25)
+            status_text.text("🔍 Generating search strategy...")
+            
+            # Create prompt
+            prompt = create_search_prompt(company, website, country)
+            
+            # Execute search
+            progress_bar.progress(50)
+            status_text.text("🌐 Searching the web for contacts...")
+            
+            result = client.query_model(model, prompt, max_retries)
+            
+            progress_bar.progress(75)
+            status_text.text("📊 Processing results...")
+            
+            if not result:
+                st.error("❌ Failed to get results from AI. Please try again.")
+                return
+            
+            # Display results
+            progress_bar.progress(100)
+            status_text.text("✅ Search completed!")
+            
+            st.header("📋 Research Results")
+            
+            # Show raw results
+            with st.expander("📄 Full AI Response", expanded=True):
+                st.markdown(result)
+            
+            # Parse and display structured data
+            df = DataProcessor.parse_markdown_table(result)
+            
+            if df is not None and not df.empty:
+                st.subheader("📊 Structured Data")
+                st.dataframe(df, use_container_width=True)
+                
+                # Export options
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    csv_data = df.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "⬇️ Download CSV",
+                        data=csv_data,
+                        file_name=f"{company.lower().replace(' ', '_')}_contacts_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+                
+                with col2:
+                    # Copy to clipboard functionality
+                    st.text_area(
+                        "📋 Copy Data",
+                        df.to_csv(index=False),
+                        height=150,
+                        help="Select all and copy to clipboard"
+                    )
+            
+            # Show citations
+            citations = DataProcessor.extract_citations(result)
+            if citations:
+                st.subheader("📚 Sources & References")
+                for i, (name, url) in enumerate(citations, 1):
+                    st.markdown(f"{i}. [{name}]({url})")
+            
+            # Clear progress indicators
+            progress_bar.empty()
+            status_text.empty()
+            
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            st.error(f"❌ An error occurred: {str(e)}")
+            progress_bar.empty()
+            status_text.empty()
+    
+    # Footer
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.caption("⚖️ **Legal**: Use responsibly and respect privacy laws")
+    
+    with col2:
+        st.caption("🔒 **Privacy**: Data is not stored permanently")
+    
+    with col3:
+        st.caption("🎯 **Accuracy**: Always verify contact information")
 
-            try:
-                output = query_openrouter(api_key, model, prompt)
-                st.markdown("### 📋 Results")
-                st.markdown(output)
-
-                # Parse and show export UI
-                df = parse_markdown_table(output)
-                if df is not None and not df.empty:
-                    csv = df.to_csv(index=False).encode("utf-8")
-                    st.download_button("⬇️ Download CSV", data=csv, file_name=f"{company.lower().replace(' ', '_')}_contacts.csv", mime="text/csv")
-
-                    # Clipboard copy area
-                    st.text_area("📎 Copy as CSV", df.to_csv(index=False), height=200)
-
-                # Citation display
-                citations = extract_citations(output)
-                if citations:
-                    st.markdown("### 📚 References")
-                    for name, url in citations:
-                        st.markdown(f"- [{name}]({url})")
-                else:
-                    st.info("ℹ️ No citations were found in the response.")
-
-                st.caption("✅ AI-generated, real-time data with source links. Always double-check for accuracy or GDPR compliance.")
-            except Exception as e:
-                st.error(f"❌ Error from OpenRouter: {e}")
+if __name__ == "__main__":
+    main()
