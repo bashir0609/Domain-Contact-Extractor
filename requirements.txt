@@ -1,0 +1,6 @@
+python >= 3.8
+selenium
+webdriver
+streamlit
+beautifulsoup4
+pandas
