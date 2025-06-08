@@ -2,4 +2,8 @@ streamlit
 selenium
 beautifulsoup4
 pandas
+requests-html
 validators
+webdriver-manager
+openai
+python-dotenv
