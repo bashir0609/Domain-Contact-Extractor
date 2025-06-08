@@ -1,33 +1,102 @@
 {
-  "name": "Python 3",
-  // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+  "name": "Email Finder Pro - Python Development",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bullseye",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  
   "customizations": {
     "codespaces": {
       "openFiles": [
         "README.md",
-        "extractor.py"
+        "company_lookup_app.py",
+        "extractor.py",
+        "config/settings.py"
       ]
     },
     "vscode": {
-      "settings": {},
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.formatting.provider": "black",
+        "python.formatting.blackArgs": ["--line-length", "88"],
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": false,
+        "python.linting.flake8Enabled": true,
+        "python.linting.flake8Args": ["--max-line-length=88", "--extend-ignore=E203"],
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true,
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": true
+        }
+      },
       "extensions": [
         "ms-python.python",
-        "ms-python.vscode-pylance"
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.flake8",
+        "ms-python.isort",
+        "streetsidesoftware.code-spell-checker",
+        "ms-vscode.vscode-json",
+        "redhat.vscode-yaml",
+        "ms-vsliveshare.vsliveshare",
+        "github.vscode-pull-request-github",
+        "eamodio.gitlens"
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
+  
+  "updateContentCommand": [
+    "bash",
+    "-c",
+    "set -e; echo '🔄 Updating system packages...'; sudo apt update && sudo apt upgrade -y; if [ -f packages.txt ]; then echo '📦 Installing system packages...'; sudo xargs apt install -y < packages.txt; fi; echo '🐍 Installing Python packages...'; pip3 install --user --upgrade pip; if [ -f requirements.txt ]; then pip3 install --user -r requirements.txt; fi; echo '🌐 Installing Chrome for Selenium...'; wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -; echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' | sudo tee /etc/apt/sources.list.d/google-chrome.list; sudo apt update; sudo apt install -y google-chrome-stable; echo '✅ Setup completed successfully!'"
+  ],
+  
+  "postCreateCommand": [
+    "bash",
+    "-c",
+    "echo '🎉 Welcome to Email Finder Pro Development Environment!'; echo ''; echo '📋 Available commands:'; echo '  • streamlit run company_lookup_app.py  - AI-powered company research'; echo '  • streamlit run extractor.py           - Direct email extraction'; echo '  • python -m pytest                     - Run tests'; echo '  • black .                               - Format code'; echo '  • flake8 .                             - Lint code'; echo ''; echo '🔧 Setup your .env file with:'; echo '  OPENROUTER_API_KEY=your_api_key_here'; echo ''; echo '📚 Check README.md for detailed instructions'"
+  ],
+  
   "postAttachCommand": {
-    "server": "streamlit run extractor.py --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "streamlit run company_lookup_app.py --server.enableCORS false --server.enableXsrfProtection false --server.port 8501 --server.address 0.0.0.0"
   },
+  
   "portsAttributes": {
     "8501": {
-      "label": "Application",
+      "label": "Streamlit App - Company Lookup",
       "onAutoForward": "openPreview"
+    },
+    "8502": {
+      "label": "Streamlit App - Email Extractor",
+      "onAutoForward": "ignore"
     }
   },
-  "forwardPorts": [
-    8501
+  
+  "forwardPorts": [8501, 8502],
+  
+  "remoteEnv": {
+    "STREAMLIT_SERVER_ENABLE_CORS": "false",
+    "STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION": "false",
+    "PYTHONPATH": "${containerWorkspaceFolder}",
+    "DISPLAY": ":99"
+  },
+  
+  "containerEnv": {
+    "TZ": "UTC",
+    "DEBIAN_FRONTEND": "noninteractive"
+  },
+  
+  "mounts": [
+    "source=${localWorkspaceFolder}/.env,target=${containerWorkspaceFolder}/.env,type=bind,consistency=cached"
+  ],
+  
+  "runArgs": [
+    "--init",
+    "--security-opt",
+    "seccomp=unconfined"
   ]
 }
